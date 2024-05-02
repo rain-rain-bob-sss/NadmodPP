@@ -44,7 +44,7 @@ if not NADMOD.Props then
 	CPPI = {}
 	
 	-- Copy over default settings if they aren't present in the disk's PPConfig
-	for k,v in pairs({toggle=true,use=false,adminall=true,autocdp=0,autocdpadmins=false}) do
+	for k,v in pairs({toggle=true,use=false,adminall=true,autocdp=0,autocdpadmins=false,noownworld=true}) do
 		if NADMOD.PPConfig[k] == nil then NADMOD.PPConfig[k] = v end
 	end
 	
@@ -149,13 +149,11 @@ function NADMOD.IsFriendProp(ply, ent)
 	end
 	return false
 end
-
 function NADMOD.PlayerCanTouch(ply, ent)
 	-- If PP is off or the ent is worldspawn, let them touch it
 	if not tobool(NADMOD.PPConfig["toggle"]) then return true end
 	if ent:IsWorld() then return ent:GetClass()=="worldspawn" end
 	if !IsValid(ent) or !IsValid(ply) or ent:IsPlayer() or !ply:IsPlayer() then return false end
-	
 	local index = ent:EntIndex()
 	if not NADMOD.Props[index] then
 		if index == 0 then
@@ -165,13 +163,14 @@ function NADMOD.PlayerCanTouch(ply, ent)
 		end
 
 		local class = ent:GetClass()
+		
 		if(class == "predicted_viewmodel" or class == "gmod_hands" or class == "physgun_beam") then
 			NADMOD.SetOwnerWorld(ent)
 		elseif ent.GetPlayer and IsValid(ent:GetPlayer()) then
 			NADMOD.PlayerMakePropOwner(ent:GetPlayer(), ent)
 		elseif ent.GetOwner and (IsValid(ent:GetOwner()) or ent:GetOwner():IsWorld()) then
 			NADMOD.PlayerMakePropOwner(ent:GetOwner(), ent)
-		else
+		elseif( ent:MapCreationID()~=-1 and not NADMOD.PPConfig["noownworld"]) then
 			NADMOD.PlayerMakePropOwner(ply, ent)
 			NADMOD.Notify(ply, "You now own this " .. class .. " (" .. string.sub(table.remove(string.Explode("/", ent:GetModel() or "?")), 1,-5) .. ")" )
 			return true
@@ -188,7 +187,10 @@ function NADMOD.PlayerCanTouch(ply, ent)
 	-- Ownerless props can be touched by all
 	if NADMOD.Props[index].Name == "O" then return true end 
 	-- Admins can touch anyones props + world
-	if NADMOD.PPConfig["adminall"] and NADMOD.IsPPAdmin(ply) then return true end
+	if(CAMI)then
+		CAMI.PlayerHasAccess(ply,"npp_cte",function(e) ply.CanTouchAll=e end)
+	end
+	if NADMOD.PPConfig["adminall"] and NADMOD.IsPPAdmin(ply) or ply.CanTouchAll then return true end
 	-- Players can touch their own props and friends
 	if NADMOD.Props[index].SteamID == ply:SteamID() or NADMOD.IsFriendProp(ply, ent) then return true end
 	
@@ -362,12 +364,16 @@ hook.Add("PostCleanupMap","NADMOD.MapCleaned",function()
 	timer.Simple(0,function() NADMOD.WorldOwner() end)
 end)
 
-
+local DontCleanUp={}
 function NADMOD.EntityRemoved(ent)
 	NADMOD.Props[ent:EntIndex()] = nil
 	NADMOD.PropOwnersSmall[ent:EntIndex()] = {SteamID = "-", Name = "-"}
 	NADMOD.RefreshOwners()
 	if ent:IsValid() and ent:IsPlayer() and not ent:IsBot() then
+		if(CAMI)then
+			local sid=ent:SteamID()
+			CAMI.SteamIDHasAccess(sid,"npp_dcl",function(e) DontCleanUp[sid]=true end)
+		end
 		-- This is more reliable than PlayerDisconnect
 		local steamid, nick = ent:SteamID(), ent:Nick()
 		if NADMOD.PPConfig.autocdp > 0 and (NADMOD.PPConfig.autocdpadmins or not NADMOD.IsPPAdmin(ent)) then 
@@ -396,6 +402,7 @@ end)
 --   Useful Concommands				  	 					--
 --==========================================================--
 function NADMOD.CleanupPlayerProps(steamid)
+	if(DontCleanUp[steamid])then DontCleanUp[steamid]=false return 0 end
 	local count = 0
 	for k,v in pairs(NADMOD.Props) do
 		if(v.SteamID == steamid) then
@@ -525,7 +532,7 @@ function NADMOD.DebugTotals(ply,cmd,args)
 end
 concommand.Add("nadmod_totals", NADMOD.DebugTotals)
 
-CreateConVar("nadmod_overlay", 2, {FCVAR_NOTIFY, FCVAR_ARCHIVE, FCVAR_REPLICATED}, "0 - Disables NPP Overlay. 1 - Minimal overlay of just owner info. 2 - Includes model, entityID, class")
+--CreateConVar("nadmod_overlay", 2, {FCVAR_NOTIFY, FCVAR_ARCHIVE}, "0 - Disables NPP Overlay. 1 - Minimal overlay of just owner info. 2 - Includes model, entityID, class")
 
 --=========================================================--
 --   Clientside Callbacks for the Friends/Options panels   --
@@ -572,9 +579,11 @@ net.Receive("nadmod_ppfriends",function(len,ply)
 	NADMOD.Save()
 	NADMOD.Notify(ply, "Friends received!")
 end)
-
+CPPI_NOTIMPLEMENTED=-1
+CPPI_DEFER=0
 function CPPI:GetName() return "Nadmod Prop Protection" end
 function CPPI:GetVersion() return NADMOD.PPVersion end
+function CPPI:InterfaceVersion() return 1.3 end
 function metaply:CPPIGetFriends()
 	if not self:IsValid() then return {} end
 	local ret = {}
@@ -586,6 +595,7 @@ function metaply:CPPIGetFriends()
 end
 function metaent:CPPIGetOwner() return self.SPPOwner end
 function metaent:CPPISetOwner(ply) return NADMOD.PlayerMakePropOwner(ply, self) end
+function metaent:CPPISetOwnerUID(ply) return NADMOD.PlayerMakePropOwner(ply, self) end
 function metaent:CPPICanTool(ply,mode) return NADMOD.CanTool(ply,{Entity=self},mode) != false end
 function metaent:CPPICanPhysgun(ply) return NADMOD.PlayerCanTouch(ply,self) == true end
 function metaent:CPPICanPickup(ply) return NADMOD.GravGunPickup(ply, self) != false end
@@ -597,3 +607,27 @@ if E2Lib and E2Lib.replace_function then
 end
 
 print("[NADMOD PP - NADMOD Prop Protection Module v"..NADMOD.PPVersion.." Loaded]")
+hook.Add("Initialize","temp_NPP",function()
+	hook.Remove("Initialize","temp_NPP")
+	if(ULib)then 
+		ULib.ucl.registerAccess(
+			"npp_cte",
+			nil,
+			"Can Touch Everything",
+			"Nadmod PP"
+		)		
+		ULib.ucl.registerAccess(
+			"npp_dcl",
+			nil,
+			"Dont auto clean",
+			"Nadmod PP"
+		)			
+		return
+	end
+	if(CAMI)then
+		if(CAMI.RegisterPrivilege)then
+			CAMI.RegisterPrivilege({Name="npp_cte",Description="Can Touch Everything",MinAccess="superadmin"})
+			CAMI.RegisterPrivilege({Name="npp_dcl",Description="Dont auto clean",MinAccess="superadmin"})
+		end
+	end
+end)

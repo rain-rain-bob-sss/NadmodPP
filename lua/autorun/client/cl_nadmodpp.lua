@@ -49,7 +49,8 @@ function NADMOD.PlayerCanTouch(ply, ent)
 	-- Ownerless props can be touched by all
 	if PropNames[index] == "Ownerless" then return true end 
 	-- Admins can touch anyones props + world
-	if NADMOD.PPConfig["adminall"] and NADMOD.IsPPAdmin(ply) then return true end
+	CAMI.PlayerHasAccess(ply,"npp_cte",function(e) ply.CanTouchAll=e end)
+	if NADMOD.PPConfig["adminall"] and NADMOD.IsPPAdmin(ply) or ply.CanTouchAll then return true end
 	-- Players can touch their own props
 	local plySteam = ply:SteamID()
 	if Props[index] == plySteam then return true end
@@ -69,7 +70,7 @@ function NADMOD.IsPPAdmin(ply)
 	end
 end
 
-local nadmod_overlay_convar = CreateConVar("nadmod_overlay", 2, {FCVAR_NOTIFY, FCVAR_ARCHIVE, FCVAR_REPLICATED}, "0 - Disables NPP Overlay. 1 - Minimal overlay of just owner info. 2 - Includes model, entityID, class")
+local nadmod_overlay_convar = CreateConVar("nadmod_overlay", 2, {FCVAR_NOTIFY, FCVAR_ARCHIVE}, "0 - Disables NPP Overlay. 1 - Minimal overlay of just owner info. 2 - Includes model, entityID, class.")
 local font = "ChatFont"
 hook.Add("HUDPaint", "NADMOD.HUDPaint", function()
 	local nadmod_overlay_setting = nadmod_overlay_convar:GetInt()
@@ -135,9 +136,8 @@ concommand.Add("npp_apply",function(ply,cmd,args)
 end)
 
 function NADMOD.AdminPanel(Panel, runByNetReceive)
-	if Panel then
-		if !NADMOD.AdminCPanel then NADMOD.AdminCPanel = Panel end
-	end
+	if(not IsValid(Panel))then return end 
+	if !NADMOD.AdminCPanel then NADMOD.AdminCPanel = Panel end
 	Panel:ClearControls()
 
 	local nonadmin_help = Panel:Help("")
@@ -165,6 +165,7 @@ function NADMOD.AdminPanel(Panel, runByNetReceive)
 	txt:SetContentAlignment( TEXT_ALIGN_CENTER )
 	local autoclean_admins = Panel:CheckBox(	"Autoclean Admins", "npp_autocdpadmins")
 	autoclean_admins:SetToolTip("Should Admin Props also be autocleaned?")
+	local noownworld = Panel:CheckBox(	"Disallow owning world props", "npp_noownworld")
 	local autoclean_timer = Panel:NumSlider("Autoclean Timer", "npp_autocdp", 0, 1200, 0 )
 	autoclean_timer:SetToolTip("0 disables autocleaning")
 	Panel:Button(	"Apply Settings", "npp_apply") 
@@ -206,7 +207,7 @@ function metaply:SteamID64bot()
 	if( not IsValid( self ) ) then return end
 	if self:IsBot() then
 		-- Calculate Bot's SteamID64 according to gmod wiki
-		return  ( 90071996842377216 + tonumber( string.sub( self:Nick(), 4) ) -1 )
+		return  ( 90071996842377216 + tonumber( string.sub( self:Nick(), 4) )or 1 -1 )
 	else
 		return self:SteamID64()
 	end
@@ -230,6 +231,7 @@ concommand.Add("npp_applyfriends",function(ply,cmd,args)
 end)
 
 function NADMOD.ClientPanel(Panel)
+	if(not IsValid(Panel))then return end 
 	RunConsoleCommand("npp_refreshfriends")
 	Panel:ClearControls()
 	if !NADMOD.ClientCPanel then NADMOD.ClientCPanel = Panel end
@@ -237,6 +239,7 @@ function NADMOD.ClientPanel(Panel)
 	
 	Panel:Button("Cleanup Props", "nadmod_cleanupprops")
 	Panel:Button("Clear Clientside Ragdolls", "nadmod_cleanclragdolls")
+	local overlay = Panel:NumSlider("Overlay", "nadmod_overlay", 0,2, 0 )
 	
 	local txt = Panel:Help("                     Friends Panel")
 	txt:SetContentAlignment( TEXT_ALIGN_CENTER )
@@ -257,10 +260,10 @@ function NADMOD.ClientPanel(Panel)
 end
 
 function NADMOD.SpawnMenuOpen()
-	if NADMOD.AdminCPanel then
+	if IsValid(NADMOD.AdminCPanel) then
 		NADMOD.AdminPanel(NADMOD.AdminCPanel)
 	end
-	if NADMOD.ClientCPanel then
+	if IsValid(NADMOD.ClientCPanel) then
 		NADMOD.ClientPanel(NADMOD.ClientCPanel)
 	end
 end
@@ -276,16 +279,29 @@ net.Receive("nadmod_notify", function(len)
 	local text = net.ReadString()
 	notification.AddLegacy(text, NOTIFY_GENERIC, 5)
 	surface.PlaySound("ambient/water/drip"..math.random(1, 4)..".wav")
-	print(text)
+	--print(text)
 end)
 
 CPPI = {}
-
+CPPI_NOTIMPLEMENTED=-1
+CPPI_DEFER=0
 function CPPI:GetName() return "Nadmod Prop Protection" end
 function CPPI:GetVersion() return "" end
+function CPPI:InterfaceVersion() return 1.3 end
+--function metaply:CPPIGetFriends() return CPPI_NOTIMPLEMENTED end
 function metaply:CPPIGetFriends() return {} end
 function metaent:CPPIGetOwner() return NADMOD.GetPropOwner(self) end
 function metaent:CPPICanTool(ply,mode) return NADMOD.PlayerCanTouch(ply,self) end
 function metaent:CPPICanPhysgun(ply) return NADMOD.PlayerCanTouch(ply,self) end
 function metaent:CPPICanPickup(ply) return NADMOD.PlayerCanTouch(ply,self) end
 function metaent:CPPICanPunt(ply) return NADMOD.PlayerCanTouch(ply,self) end
+hook.Add("Initialize","temp_NPP",function()
+	hook.Remove("Initialize","temp_NPP")
+	if(ULib)then return end
+	if(CAMI)then
+		if(CAMI.RegisterPrivilege)then
+			CAMI.RegisterPrivilege({Name="npp_cte",Description="Can Touch Everything",MinAccess="superadmin"})
+			CAMI.RegisterPrivilege({Name="npp_dcl",Description="Dont auto clean",MinAccess="superadmin"})
+		end
+	end
+end)
